@@ -3,9 +3,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 
 #define START_SIZE 10
 #define BACKGROUNG_EXEC "&"
+#define FILE_REDIRECT ">"
 #define PIPE_OUTPUT "|"
 
 int *bg_pids;
@@ -77,6 +79,17 @@ int exec_back(char **arglist)
     }
 }
 
+int redirect_exec(char** arglist, char* outfile)
+{
+    int res = 0;
+    int fout_desc = open(outfile, O_WRONLY | O_CREAT);
+    int store_stdout = dup(STDOUT_FILENO);
+    dup2(fout_desc, STDOUT_FILENO);
+    res = exec_front(arglist);
+    dup2(store_stdout, STDOUT_FILENO);
+    return res;
+}
+
 int find_word(int count, char** arglist, char* word)
 {
     for (int i = 0; i < count; i++)
@@ -92,10 +105,16 @@ int find_word(int count, char** arglist, char* word)
 int process_arglist(int count, char **arglist)
 {
     int index = -1;
-    if (index = find_word(count, arglist, PIPE_OUTPUT) != -1)
+    if ((index = find_word(count, arglist, PIPE_OUTPUT)) != -1)
     {
         arglist[index] = NULL;
         index++;
+    }
+    if ((index = find_word(count, arglist, FILE_REDIRECT)) != -1)
+    {
+        arglist[index] = NULL;
+        return redirect_exec(arglist, arglist[index + 1]);
+
     }
     if (strcmp(arglist[count-1], BACKGROUNG_EXEC) == 0)
     {
