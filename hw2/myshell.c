@@ -10,6 +10,9 @@
 #define FILE_REDIRECT ">"
 #define PIPE_OUTPUT "|"
 
+#define READ_END 0
+#define WRITE_END 1
+
 int *bg_pids;
 int bg_pids_size = START_SIZE;
 int bg_pids_count = 0;
@@ -19,7 +22,7 @@ int prepare(void)
     bg_pids = (int *)malloc(sizeof(*bg_pids) * START_SIZE);
     if (bg_pids == NULL)
     {
-        printf("error allocating bg_pids array\n");
+        perror("error allocating bg_pids array\n");
         return 1;
     }
     return 0;
@@ -55,7 +58,6 @@ int exec_front(char **arglist)
 int exec_back(char **arglist)
 {
     int pid = fork();
-    int exit_code = -1;
     if (pid == 0)
     {
         execvp(arglist[0], arglist);
@@ -69,7 +71,7 @@ int exec_back(char **arglist)
             bg_pids = (int *)realloc(bg_pids, bg_pids_size);
             if (bg_pids == NULL)
             {
-                printf("error reallocating bg_pids array\n");
+                perror("error reallocating bg_pids array\n");
                 return 1;
             }
             bg_pids[bg_pids_count] = pid;
@@ -79,10 +81,10 @@ int exec_back(char **arglist)
     }
 }
 
-int redirect_exec(char** arglist, char* outfile)
+int redirect_exec(char **arglist, char *outfile)
 {
     int res = 0;
-    int fout_desc = open(outfile, O_WRONLY | O_CREAT);
+    int fout_desc = open(outfile, O_WRONLY | O_CREAT, 0666);
     int store_stdout = dup(STDOUT_FILENO);
     dup2(fout_desc, STDOUT_FILENO);
     res = exec_front(arglist);
@@ -90,7 +92,46 @@ int redirect_exec(char** arglist, char* outfile)
     return res;
 }
 
-int find_word(int count, char** arglist, char* word)
+int piped_exec(char **cmd1, char **cmd2)
+{
+    int fd[2], c1_pid, c2_pid;
+    if (pipe(fd))
+    {
+        perror("pipe fail\n");
+        exit(1);
+    }
+    // first child write to pipe
+    c1_pid = fork();
+    if (c1_pid == 0)
+    {
+        dup2(fd[WRITE_END], STDOUT_FILENO);
+        close(fd[WRITE_END]);
+        close(fd[READ_END]);
+        execvp(cmd1[0], cmd1);
+        perror("Faild to exec first command from pipe\n");
+        return 0;
+    }
+    // second child (read from pipe)
+    c2_pid = fork();
+    if (c2_pid == 0)
+    {
+        dup2(fd[READ_END], STDIN_FILENO);
+        close(fd[WRITE_END]);
+        close(fd[READ_END]);
+        printf("%s %s %s", cmd2[0], cmd2[1], cmd2[2]);
+        execvp(cmd2[0], cmd2);
+        perror("Faild to exec second command from pipe\n");
+        return 0;
+    }
+    int exit_code = -1;
+    close(fd[WRITE_END]);
+    close(fd[READ_END]);
+    waitpid(c1_pid, &exit_code, 0);
+    waitpid(c2_pid, &exit_code, 0);
+    return 1;
+}
+
+int find_word(int count, char **arglist, char *word)
 {
     for (int i = 0; i < count; i++)
     {
@@ -107,19 +148,22 @@ int process_arglist(int count, char **arglist)
     int index = -1;
     if ((index = find_word(count, arglist, PIPE_OUTPUT)) != -1)
     {
+        char **cmd1, **cmd2;
         arglist[index] = NULL;
-        index++;
+        cmd1 = arglist;
+        cmd2 = &(arglist[index + 1]);
+        return piped_exec(cmd1, cmd2);
     }
-    if ((index = find_word(count, arglist, FILE_REDIRECT)) != -1)
+    else if ((index = find_word(count, arglist, FILE_REDIRECT)) != -1)
     {
         arglist[index] = NULL;
         return redirect_exec(arglist, arglist[index + 1]);
-
     }
-    if (strcmp(arglist[count-1], BACKGROUNG_EXEC) == 0)
+    else if (strcmp(arglist[count - 1], BACKGROUNG_EXEC) == 0)
     {
         arglist[count - 1] = NULL;
         return exec_back(arglist);
+    } else {
+        return exec_front(arglist);
     }
-    return exec_front(arglist);
 }
