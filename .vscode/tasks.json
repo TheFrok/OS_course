@@ -15,7 +15,7 @@
 				"shell.c",
 				"myshell.c",
 				"-o",
-				"shell.out"
+				"${fileDirname}/${fileBasenameNoExtension}"
 			],
 			"options": {
 				"cwd": "${fileDirname}"
