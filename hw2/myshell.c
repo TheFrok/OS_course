@@ -13,30 +13,31 @@
 #define READ_END 0
 #define WRITE_END 1
 
-int *bg_pids;
-int bg_pids_size = START_SIZE;
-int bg_pids_count = 0;
+int bg_proccess_count = 0;
+
+
+// TODO:
+// 1. hunt zombies
+// 2. ignore signint
+// 3. handle errors
 
 int prepare(void)
 {
-    bg_pids = (int *)malloc(sizeof(*bg_pids) * START_SIZE);
-    if (bg_pids == NULL)
-    {
-        perror("error allocating bg_pids array\n");
-        return 1;
-    }
     return 0;
 }
 
 int finalize(void)
 {
-    for (int i = 0; i < bg_pids_count; i++)
-    {
-        int pid = bg_pids[i];
-        int exit_code = -1;
-        waitpid(pid, &exit_code, 0);
-    }
     return 0;
+}
+
+int hunt_zombies()
+{
+    while ((bg_proccess_count > 0) && ( waitpid(-1, NULL, WNOHANG) > 0))
+    {
+        bg_proccess_count--;
+    }
+    return 0;    
 }
 
 int exec_front(char **arglist)
@@ -46,6 +47,7 @@ int exec_front(char **arglist)
     if (pid == 0)
     {
         execvp(arglist[0], arglist);
+        perror("Error executing foreground proccess\n");
         return 0; // signaling its a child proccess
     }
     else
@@ -61,22 +63,12 @@ int exec_back(char **arglist)
     if (pid == 0)
     {
         execvp(arglist[0], arglist);
+        perror("Error executing background proccess\n");
         return 0; // signaling its a child proccess
     }
     else
     {
-        if (bg_pids_count == bg_pids_size)
-        {
-            bg_pids_size *= 2;
-            bg_pids = (int *)realloc(bg_pids, bg_pids_size);
-            if (bg_pids == NULL)
-            {
-                perror("error reallocating bg_pids array\n");
-                return 1;
-            }
-            bg_pids[bg_pids_count] = pid;
-            bg_pids_count++;
-        }
+        bg_proccess_count++;
         return 1;
     }
 }
@@ -146,6 +138,7 @@ int find_word(int count, char **arglist, char *word)
 int process_arglist(int count, char **arglist)
 {
     int index = -1;
+    hunt_zombies();
     if ((index = find_word(count, arglist, PIPE_OUTPUT)) != -1)
     {
         char **cmd1, **cmd2;

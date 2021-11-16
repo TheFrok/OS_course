@@ -1,0 +1,33 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "cppbuild",
+			"label": "Build hw2 shell.c with myshell.c file",
+			"command": "/usr/bin/gcc",
+			"args": [
+				"-Wall",
+				"-O3",
+				"-D_POSIX_C_SOURCE=200809",
+				"-std=c11",
+				"-fdiagnostics-color=always",
+				"-g",
+				"shell.c",
+				"myshell.c",
+				"-o",
+				"shell.out"
+			],
+			"options": {
+				"cwd": "${fileDirname}"
+			},
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"detail": "compiler: /usr/bin/gcc"
+		}
+	]
+}
