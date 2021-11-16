@@ -60,15 +60,15 @@ int prepare(void)
         perror("Error assiging ignroe handler on SIGINT");
         return 1;
     }
-    memset(&new_action, 0, sizeof(new_action));
-    new_action.sa_sigaction = sigchld_handler;
-    new_action.sa_flags = SA_SIGINFO;
+    // memset(&new_action, 0, sizeof(new_action));
+    // new_action.sa_sigaction = sigchld_handler;
+    // new_action.sa_flags = SA_SIGINFO;
     // Register the handler
-    // if( 0 != sigaction(SIGCHLD, &new_action, NULL) )
-    // {
-    //     perror("Error assinging SIGCHLD new wait handler");
-    //     return 1;
-    // }
+    if( 0 != sigaction(SIGCHLD, &new_action, NULL) )
+    {
+        perror("Error assinging SIGCHLD new wait handler");
+        return 1;
+    }
     return 0;
 }
 
@@ -258,7 +258,7 @@ int find_word(int count, char **arglist, char *word)
 int process_arglist(int count, char **arglist)
 {
     int index = -1;
-    if (! hunt_zombies() ) return 0;
+    // if (! hunt_zombies() ) return 0;
     if ((index = find_word(count, arglist, PIPE_OUTPUT)) != -1)
     {
         char **cmd1, **cmd2;
