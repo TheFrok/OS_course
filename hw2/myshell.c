@@ -14,33 +14,15 @@
 #define READ_END 0
 #define WRITE_END 1
 
-int bg_proccess_count = 0;
-
-
-// TODO:
-// 3. handle errors
-// 4. handle wait/fork/exec/pipe/dup2/sig/open/close assign errors
-// 5. investigate SIGCHLD
-
-void sigchld_handler( int        signum,
-                      siginfo_t* info,
-                      void*      ptr)
-{
-    unsigned long chld_pid = (unsigned long) info->si_pid;
-    int r = waitpid(chld_pid, NULL, WNOHANG);
-    if (r == -1 && errno != ECHILD && errno != 0)
-    {
-        perror("error in signal handler");
-        exit(1);
-    }
-}
-
+/*
+    used to revert SIGINT to the default handler in foreground childrens
+*/
 int reset_sigint_action()
 {
     struct sigaction new_action;
     memset(&new_action, 0, sizeof(new_action));
     new_action.sa_handler = SIG_DFL;
-    if( 0 != sigaction(SIGINT, &new_action, NULL) )
+    if (0 != sigaction(SIGINT, &new_action, NULL))
     {
         perror("Error assiging defaul handler on SIGINT");
         // since this function is called only on children we can exit on error
@@ -51,20 +33,16 @@ int reset_sigint_action()
 
 int prepare(void)
 {
-    // Structure to pass to the registration syscall
     struct sigaction new_action;
     memset(&new_action, 0, sizeof(new_action));
     new_action.sa_handler = SIG_IGN;
-    if( 0 != sigaction(SIGINT, &new_action, NULL) )
+    if (0 != sigaction(SIGINT, &new_action, NULL))
     {
         perror("Error assiging ignroe handler on SIGINT");
         return 1;
     }
-    // memset(&new_action, 0, sizeof(new_action));
-    // new_action.sa_sigaction = sigchld_handler;
-    // new_action.sa_flags = SA_SIGINFO;
-    // Register the handler
-    if( 0 != sigaction(SIGCHLD, &new_action, NULL) )
+    // setting SIGCHLD to be ignored prevent zombies as explained in the MAN of sigaction
+    if (0 != sigaction(SIGCHLD, &new_action, NULL))
     {
         perror("Error assinging SIGCHLD new wait handler");
         return 1;
@@ -75,23 +53,6 @@ int prepare(void)
 int finalize(void)
 {
     return 0;
-}
-
-int hunt_zombies()
-{
-    int r = 0;
-    while ((bg_proccess_count > 0) && 
-           ( (r = waitpid(-1, NULL, WNOHANG)) > 0)
-        )
-    {
-        bg_proccess_count--;
-    }
-    if (r == -1 && errno != ECHILD && errno != 0)
-    {
-        perror("error while waiting for zombies");
-        return 0;
-    }
-    return 1;
 }
 
 int exec_front(char **arglist)
@@ -137,7 +98,6 @@ int exec_back(char **arglist)
             perror("Error while forking");
             return 0;
         }
-        bg_proccess_count++;
         return 1;
     }
 }
@@ -145,25 +105,26 @@ int exec_back(char **arglist)
 int redirect_exec(char **arglist, char *outfile)
 {
     int res = 0;
-    int fout_desc = open(outfile, O_WRONLY | O_TRUNC | O_CREAT, 0666);
-    if (fout_desc == -1) 
+    int fout_desc, store_stdout;
+    if ((fout_desc = open(outfile, O_WRONLY | O_TRUNC | O_CREAT, 0666)) == -1)
     {
         perror("Couldn't open new file descriptor");
         return 0;
     }
-    int store_stdout = dup(STDOUT_FILENO);
-    if (store_stdout == -1) 
+    if ((store_stdout = dup(STDOUT_FILENO)) == -1)
     {
         perror("Couldn't dup new file descriptor");
         return 0;
     }
-    if (-1 == dup2(fout_desc, STDOUT_FILENO) )
+    if (-1 == dup2(fout_desc, STDOUT_FILENO))
     {
         perror("Error using dup2.");
         return 0;
     }
+    // use my method to exec foreground proccess
     res = exec_front(arglist);
-    if (-1 == dup2(store_stdout, STDOUT_FILENO) )
+    // restore stdout
+    if (-1 == dup2(store_stdout, STDOUT_FILENO))
     {
         perror("Error using dup2.");
         return 0;
@@ -185,13 +146,15 @@ int piped_exec(char **cmd1, char **cmd2)
     if (c1_pid == 0)
     {
         reset_sigint_action();
-        if (-1 == dup2(fd[WRITE_END], STDOUT_FILENO) )
+        if (-1 == dup2(fd[WRITE_END], STDOUT_FILENO))
         {
             perror("Error using dup2.");
             exit(1);
         }
-        if (-1 == close(fd[WRITE_END])) exit(1);
-        if (-1 == close(fd[READ_END])) exit(1);
+        if (-1 == close(fd[WRITE_END]))
+            exit(1);
+        if (-1 == close(fd[READ_END]))
+            exit(1);
         execvp(cmd1[0], cmd1);
         perror("Faild to exec first command from pipe");
         return 0;
@@ -201,13 +164,15 @@ int piped_exec(char **cmd1, char **cmd2)
     if (c2_pid == 0)
     {
         reset_sigint_action();
-        if (-1 == dup2(fd[READ_END], STDIN_FILENO) )
+        if (-1 == dup2(fd[READ_END], STDIN_FILENO))
         {
             perror("Error using dup2.");
             exit(1);
         }
-        if (-1 == close(fd[WRITE_END])) exit(1);
-        if (-1 == close(fd[READ_END])) exit(1);
+        if (-1 == close(fd[WRITE_END]))
+            exit(1);
+        if (-1 == close(fd[READ_END]))
+            exit(1);
         printf("%s %s %s", cmd2[0], cmd2[1], cmd2[2]);
         execvp(cmd2[0], cmd2);
         perror("Faild to exec second command from pipe");
@@ -217,25 +182,25 @@ int piped_exec(char **cmd1, char **cmd2)
     {
         perror("error closing pipe");
         return 0;
-    } 
+    }
     if (-1 == close(fd[READ_END]))
     {
         perror("error closing pipe");
         return 0;
-    } 
-    if (c1_pid == 1 || c2_pid == -1)
+    }
+    if (c1_pid == -1 || c2_pid == -1)
     {
         perror("Error while forking.");
         return 0;
     }
     r = waitpid(c1_pid, NULL, 0);
-    if (r == -1 && errno != ECHILD && errno != 0 && errno != EINTR)
+    if (r == -1 && errno != ECHILD && errno != EINTR)
     {
         perror("error while waiting for PIPED proccess");
         return 0;
     }
     r = waitpid(c2_pid, NULL, 0);
-    if (r == -1 && errno != ECHILD && errno != 0 && errno != EINTR)
+    if (r == -1 && errno != ECHILD && errno != EINTR)
     {
         perror("error while waiting for PIPED proccess");
         return 0;
@@ -243,6 +208,10 @@ int piped_exec(char **cmd1, char **cmd2)
     return 1;
 }
 
+/*
+finds the index of a specifiec word in the arglist
+returns its index if found otherwise -1
+*/
 int find_word(int count, char **arglist, char *word)
 {
     for (int i = 0; i < count; i++)
@@ -276,7 +245,9 @@ int process_arglist(int count, char **arglist)
     {
         arglist[count - 1] = NULL;
         return exec_back(arglist);
-    } else {
+    }
+    else
+    {
         return exec_front(arglist);
     }
 }
