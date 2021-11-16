@@ -18,18 +18,17 @@ int bg_proccess_count = 0;
 
 
 // TODO:
-// 2. ignore signint
 // 3. handle errors
-// 4. handle wait/fork/exec/pipe/dup2/sig assign errors
+// 4. handle wait/fork/exec/pipe/dup2/sig/open/close assign errors
+// 5. investigate SIGCHLD
 
 void sigchld_handler( int        signum,
                       siginfo_t* info,
                       void*      ptr)
 {
     unsigned long chld_pid = (unsigned long) info->si_pid;
-    printf("The child pid is: %li\n", chld_pid);
-    waitpid(chld_pid, NULL, WNOHANG);
-    if (errno != ECHILD && errno != 0)
+    int r = waitpid(chld_pid, NULL, WNOHANG);
+    if (r == -1 && errno != ECHILD && errno != 0)
     {
         perror("error in signal handler");
         exit(1);
@@ -44,7 +43,8 @@ int reset_sigint_action()
     if( 0 != sigaction(SIGINT, &new_action, NULL) )
     {
         perror("Error assiging defaul handler on SIGINT");
-        return 1;
+        // since this function is called only on children we can exit on error
+        exit(1);
     }
     return 0;
 }
@@ -79,11 +79,19 @@ int finalize(void)
 
 int hunt_zombies()
 {
-    while ((bg_proccess_count > 0) && ( waitpid(-1, NULL, WNOHANG) > 0))
+    int r = 0;
+    while ((bg_proccess_count > 0) && 
+           ( (r = waitpid(-1, NULL, WNOHANG)) > 0)
+        )
     {
         bg_proccess_count--;
     }
-    return 0;    
+    if (r == -1 && errno != ECHILD && errno != 0)
+    {
+        perror("error while waiting for zombies");
+        return 0;
+    }
+    return 1;
 }
 
 int exec_front(char **arglist)
@@ -98,7 +106,17 @@ int exec_front(char **arglist)
     }
     else
     {
-        waitpid(pid, NULL, 0);
+        if (pid == -1)
+        {
+            perror("Error while forking");
+            return 0;
+        }
+        int r = waitpid(pid, NULL, 0);
+        if (r == -1 && errno != ECHILD && errno != 0 && errno != EINTR)
+        {
+            perror("error while waiting for fron proccess");
+            return 0;
+        }
         return 1;
     }
 }
@@ -114,6 +132,11 @@ int exec_back(char **arglist)
     }
     else
     {
+        if (pid == -1)
+        {
+            perror("Error while forking");
+            return 0;
+        }
         bg_proccess_count++;
         return 1;
     }
@@ -123,29 +146,52 @@ int redirect_exec(char **arglist, char *outfile)
 {
     int res = 0;
     int fout_desc = open(outfile, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+    if (fout_desc == -1) 
+    {
+        perror("Couldn't open new file descriptor");
+        return 0;
+    }
     int store_stdout = dup(STDOUT_FILENO);
-    dup2(fout_desc, STDOUT_FILENO);
+    if (store_stdout == -1) 
+    {
+        perror("Couldn't dup new file descriptor");
+        return 0;
+    }
+    if (-1 == dup2(fout_desc, STDOUT_FILENO) )
+    {
+        perror("Error using dup2.");
+        return 0;
+    }
     res = exec_front(arglist);
-    dup2(store_stdout, STDOUT_FILENO);
+    if (-1 == dup2(store_stdout, STDOUT_FILENO) )
+    {
+        perror("Error using dup2.");
+        return 0;
+    }
     return res;
 }
 
 int piped_exec(char **cmd1, char **cmd2)
 {
     int fd[2], c1_pid, c2_pid;
+    int r;
     if (pipe(fd))
     {
         perror("pipe fail");
-        exit(1);
+        return 0;
     }
     // first child write to pipe
     c1_pid = fork();
     if (c1_pid == 0)
     {
         reset_sigint_action();
-        dup2(fd[WRITE_END], STDOUT_FILENO);
-        close(fd[WRITE_END]);
-        close(fd[READ_END]);
+        if (-1 == dup2(fd[WRITE_END], STDOUT_FILENO) )
+        {
+            perror("Error using dup2.");
+            exit(1);
+        }
+        if (-1 == close(fd[WRITE_END])) exit(1);
+        if (-1 == close(fd[READ_END])) exit(1);
         execvp(cmd1[0], cmd1);
         perror("Faild to exec first command from pipe");
         return 0;
@@ -155,18 +201,45 @@ int piped_exec(char **cmd1, char **cmd2)
     if (c2_pid == 0)
     {
         reset_sigint_action();
-        dup2(fd[READ_END], STDIN_FILENO);
-        close(fd[WRITE_END]);
-        close(fd[READ_END]);
+        if (-1 == dup2(fd[READ_END], STDIN_FILENO) )
+        {
+            perror("Error using dup2.");
+            exit(1);
+        }
+        if (-1 == close(fd[WRITE_END])) exit(1);
+        if (-1 == close(fd[READ_END])) exit(1);
         printf("%s %s %s", cmd2[0], cmd2[1], cmd2[2]);
         execvp(cmd2[0], cmd2);
         perror("Faild to exec second command from pipe");
         return 0;
     }
-    close(fd[WRITE_END]);
-    close(fd[READ_END]);
-    waitpid(c1_pid, NULL, 0);
-    waitpid(c2_pid, NULL, 0);
+    if (-1 == close(fd[WRITE_END]))
+    {
+        perror("error closing pipe");
+        return 0;
+    } 
+    if (-1 == close(fd[READ_END]))
+    {
+        perror("error closing pipe");
+        return 0;
+    } 
+    if (c1_pid == 1 || c2_pid == -1)
+    {
+        perror("Error while forking.");
+        return 0;
+    }
+    r = waitpid(c1_pid, NULL, 0);
+    if (r == -1 && errno != ECHILD && errno != 0 && errno != EINTR)
+    {
+        perror("error while waiting for PIPED proccess");
+        return 0;
+    }
+    r = waitpid(c2_pid, NULL, 0);
+    if (r == -1 && errno != ECHILD && errno != 0 && errno != EINTR)
+    {
+        perror("error while waiting for PIPED proccess");
+        return 0;
+    }
     return 1;
 }
 
@@ -185,7 +258,7 @@ int find_word(int count, char **arglist, char *word)
 int process_arglist(int count, char **arglist)
 {
     int index = -1;
-    hunt_zombies();
+    if (! hunt_zombies() ) return 0;
     if ((index = find_word(count, arglist, PIPE_OUTPUT)) != -1)
     {
         char **cmd1, **cmd2;
